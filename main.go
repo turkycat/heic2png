@@ -29,6 +29,7 @@ func main() {
 func main_() int {
 	var findAll bool
 	var singleFile string
+	var targetDir string
 	var numWorkers int
 	var deleteOnSuccess bool
 	var forceOverwrite bool
@@ -38,6 +39,8 @@ func main_() int {
 	flag.BoolVar(&deleteOnSuccess, "delete", false, "")
 	flag.StringVar(&singleFile, "file", "", "")
 	flag.StringVar(&singleFile, "f", "", "")
+	flag.StringVar(&targetDir, "target-dir", ".", "")
+	flag.StringVar(&targetDir, "t", ".", "")
 	flag.BoolVar(&forceOverwrite, "overwrite", false, "")
 	flag.IntVar(&numWorkers, "procs", runtime.NumCPU(), "")
 	flag.IntVar(&numWorkers, "p", runtime.NumCPU(), "")
@@ -48,6 +51,7 @@ func main_() int {
   -a, --all     · · · · ·   find all *.heic files and convert them to *.png
       --delete  · · · · ·   delete original heic file after successfull conversion
   -f, --file    <filename>  specify a single heic file to convert to .png
+  -t, --target-dir <path>   specify a target directory. If it does not exist, it gets created
       --overwrite · · · ·   if target png file already exists, overwrite it
   -p, --procs   <num_procs> max number of files to process in parallel (default %d)
   -v, --version · · · · ·   print version information and exit
@@ -131,7 +135,7 @@ func main_() int {
 				fheic := frog.String("heic_path", t.HeicPath)
 				fpng := frog.String("png_path", t.PngPath)
 
-				err := convertHeicToPng(t.HeicPath, t.PngPath, forceOverwrite, func(step, max int) {
+				err := convertHeicToPng(t.HeicPath, t.PngPath, t.TargetDir, forceOverwrite, func(step, max int) {
 					l.Transient("converting: "+progressBar(step, max, '·', '☆'), fheic, fpng, fid)
 				})
 				if err != nil {
@@ -159,8 +163,9 @@ func main_() int {
 	// send work to workers
 	for _, v := range filelist {
 		chTasks <- Task{
-			HeicPath: v,
-			PngPath:  removeExt(v) + ".png",
+			HeicPath:  v,
+			PngPath:   removeExt(v) + ".png",
+			TargetDir: targetDir,
 		}
 	}
 
@@ -173,11 +178,12 @@ func main_() int {
 }
 
 type Task struct {
-	HeicPath string
-	PngPath  string
+	HeicPath  string
+	PngPath   string
+	TargetDir string
 }
 
-func convertHeicToPng(filenameIn, filenameOut string, forceOverwrite bool, fnProgress func(step, max int)) error {
+func convertHeicToPng(filenameIn, filenameOut string, targetDir string, forceOverwrite bool, fnProgress func(step, max int)) error {
 	if fnProgress == nil {
 		fnProgress = func(_, _ int) {}
 	}
@@ -197,13 +203,21 @@ func convertHeicToPng(filenameIn, filenameOut string, forceOverwrite bool, fnPro
 
 	fnProgress(2, 4)
 	var fOut *os.File
+	var outputPath = filepath.Join(targetDir, filenameOut)
+
+	err = os.MkdirAll(targetDir, 0o755)
+
+	if err != nil {
+		return fmt.Errorf("unable to create directory %s: %w", targetDir, err)
+	}
+
 	if forceOverwrite {
-		fOut, err = os.Create(filenameOut)
+		fOut, err = os.Create(outputPath)
 	} else {
-		fOut, err = os.OpenFile(filenameOut, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
+		fOut, err = os.OpenFile(outputPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
 	}
 	if err != nil {
-		return fmt.Errorf("unable to create %s: %v", filenameOut, err)
+		return fmt.Errorf("unable to create %s: %v", outputPath, err)
 	}
 	defer fOut.Close()
 
@@ -211,7 +225,7 @@ func convertHeicToPng(filenameIn, filenameOut string, forceOverwrite bool, fnPro
 	pngenc := png.Encoder{CompressionLevel: png.BestSpeed}
 	err = pngenc.Encode(fOut, img)
 	if err != nil {
-		return fmt.Errorf("unable to encode %s: %w", filenameOut, err)
+		return fmt.Errorf("unable to encode %s: %w", outputPath, err)
 	}
 
 	fnProgress(4, 4)
