@@ -27,20 +27,19 @@ func main() {
 }
 
 func main_() int {
-	var findAll bool
-	var singleFile string
+	var source string
+	var recursive bool
 	var targetDir string
 	var numWorkers int
 	var deleteOnSuccess bool
 	var forceOverwrite bool
 	var version bool
-	flag.BoolVar(&findAll, "all", false, "")
-	flag.BoolVar(&findAll, "a", false, "")
-	flag.BoolVar(&deleteOnSuccess, "delete", false, "")
-	flag.StringVar(&singleFile, "file", "", "")
-	flag.StringVar(&singleFile, "f", "", "")
+	flag.StringVar(&source, "source", "", "")
+	flag.StringVar(&source, "s", "", "")
+	flag.BoolVar(&recursive, "recursive", false, "")
 	flag.StringVar(&targetDir, "target-dir", ".", "")
 	flag.StringVar(&targetDir, "t", ".", "")
+	flag.BoolVar(&deleteOnSuccess, "delete", false, "")
 	flag.BoolVar(&forceOverwrite, "overwrite", false, "")
 	flag.IntVar(&numWorkers, "procs", runtime.NumCPU(), "")
 	flag.IntVar(&numWorkers, "p", runtime.NumCPU(), "")
@@ -48,10 +47,10 @@ func main_() int {
 	flag.BoolVar(&version, "v", false, "")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `Usage of heic2png:
-  -a, --all     · · · · ·   find all *.heic files and convert them to *.png
-      --delete  · · · · ·   delete original heic file after successfull conversion
-  -f, --file    <filename>  specify a single heic file to convert to .png
+  -s, --source <path>       specify a source file or directory.
+  -r  --recursive           recurse into subdirectories, if source is a directory
   -t, --target-dir <path>   specify a target directory. If it does not exist, it gets created
+      --delete  · · · · ·   delete original heic file after successfull conversion
       --overwrite · · · ·   if target png file already exists, overwrite it
   -p, --procs   <num_procs> max number of files to process in parallel (default %d)
   -v, --version · · · · ·   print version information and exit
@@ -66,7 +65,7 @@ func main_() int {
 		return 0
 	}
 
-	if !findAll && len(singleFile) == 0 {
+	if len(source) == 0 {
 		fmt.Fprintf(os.Stderr, "no file(s) specified\n")
 		flag.Usage()
 		return -1
@@ -77,38 +76,50 @@ func main_() int {
 
 	// build list of files
 	var filelist []string
-	switch {
-	case len(singleFile) > 0:
-		filelist = append(filelist, singleFile)
+	var directoryQueue []string
+	
+	// check if source path exists and determine if it's a file or directory
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		log.Error("source path does not exist or is not accessible", frog.String("source", source), frog.Err(err))
+		return -1
+	}
+	
+	if sourceInfo.IsDir() {
+		directoryQueue = append(directoryQueue, source)
+	} else {
+		filelist = append(filelist, source)
+	}
 
-	case findAll:
-		// get local directory
-		cwd, err := os.Getwd()
+	for len(directoryQueue) > 0 {
+		dir := directoryQueue[0]
+		directoryQueue = directoryQueue[1:]
+
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			log.Error("os.Getwd() had error", frog.Err(err))
-			return -1
+			log.Error("unable to read directory", frog.String("directory", dir), frog.Err(err))
+			continue
 		}
-		files, err := os.ReadDir(cwd)
-		if err != nil {
-			log.Error("os.ReadDir(cwd) had error", frog.String("cwd", cwd), frog.Err(err))
-			return -1
-		}
-		filelist = make([]string, 0, len(files))
-		for _, v := range files {
-			if v.IsDir() {
-				continue
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				if recursive {
+					directoryQueue = append(directoryQueue, filepath.Join(dir, entry.Name()))
+					continue
+				}
+			} else {
+				if strings.HasSuffix(strings.ToLower(entry.Name()), ".heic") {
+					filelist = append(filelist, filepath.Join(dir, entry.Name()))
+				}
 			}
-			name := v.Name()
-			if !strings.HasSuffix(strings.ToLower(filepath.Ext(name)), ".heic") {
-				continue
-			}
-			filelist = append(filelist, v.Name())
 		}
 	}
 
 	if len(filelist) == 0 {
 		log.Warning("no files found, nothing to do")
 		return 0
+	} else if len(filelist) > 1 {
+		log.Info("found files", frog.Int("num_files", len(filelist)))
 	}
 
 	// only spin up as many workers as we'll actually need
@@ -205,10 +216,10 @@ func convertHeicToPng(filenameIn, filenameOut string, targetDir string, forceOve
 	var fOut *os.File
 	var outputPath = filepath.Join(targetDir, filenameOut)
 
-	err = os.MkdirAll(targetDir, 0o755)
-
+	outputDir := filepath.Dir(outputPath)
+	err = os.MkdirAll(outputDir, 0o755)
 	if err != nil {
-		return fmt.Errorf("unable to create directory %s: %w", targetDir, err)
+		return fmt.Errorf("unable to create directory %s: %w", outputDir, err)
 	}
 
 	if forceOverwrite {
