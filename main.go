@@ -214,8 +214,16 @@ func convertHeicToPng(filenameIn, filenameOut string, targetDir string, forceOve
 
 	fnProgress(2, 4)
 	var fOut *os.File
-	var outputPath = filepath.Join(targetDir, filenameOut)
+	var outputPath string
+	
+	// If filenameOut is absolute, use it directly; otherwise join with targetDir
+	if filepath.IsAbs(filenameOut) {
+		outputPath = filenameOut
+	} else {
+		outputPath = filepath.Join(targetDir, filenameOut)
+	}
 
+	// extract directory from output path and create all directories
 	outputDir := filepath.Dir(outputPath)
 	err = os.MkdirAll(outputDir, 0o755)
 	if err != nil {
